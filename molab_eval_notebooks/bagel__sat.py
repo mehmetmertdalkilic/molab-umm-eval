@@ -643,6 +643,33 @@ def _():
             if p not in sys.path:
                 sys.path.insert(0, p)
 
+        shim = spec.get("flash_attn_shim")
+        if shim:
+            # Force the PyTorch-SDPA stand-in, even if a broken or partial flash_attn
+            # (e.g. a namespace-only directory) sits in site-packages.
+            import importlib.util
+
+            for k in [k for k in sys.modules if k == "flash_attn" or k.startswith("flash_attn.")]:
+                del sys.modules[k]
+            shim_root = os.path.dirname(os.path.dirname(shim))
+            if shim_root not in sys.path:
+                sys.path.insert(0, shim_root)
+            fa_spec = importlib.util.spec_from_file_location(
+                "flash_attn", shim, submodule_search_locations=[os.path.dirname(shim)])
+            fa_mod = importlib.util.module_from_spec(fa_spec)
+            sys.modules["flash_attn"] = fa_mod
+            fa_spec.loader.exec_module(fa_mod)
+            # transformers must not route anything through its own flash-attn-2 code path
+            import transformers.utils as tf_utils
+            import transformers.utils.import_utils as tf_import_utils
+
+            def _no_fa2(*args, **kwargs):
+                return False
+
+            tf_import_utils.is_flash_attn_2_available = _no_fa2
+            tf_utils.is_flash_attn_2_available = _no_fa2
+            print(f"[molab] flash_attn -> PyTorch SDPA fallback ({fa_mod.__version__})", flush=True)
+
         if spec.get("stub_thinkmorph"):
             # DeltaV runs on transformers 4.57; the fork's BAGEL/ThinkMorph modeling code
             # targets 4.49, so keep it from being imported at all.
@@ -1144,16 +1171,16 @@ def _(
             "import torch, torch.nn.functional as F; import torchvision; "
             "x = torch.randn(64, 64, device='cuda', dtype=torch.bfloat16); (x @ x).sum().item(); "
             "q = torch.randn(1, 2, 16, 64, device='cuda', dtype=torch.bfloat16); F.scaled_dot_product_attention(q, q, q); "
-            "print('CUDA_OK', torch.__version__, torch.cuda.get_device_name(0))"
+            "print('CUDA' + '_OK', torch.__version__, torch.cuda.get_device_name(0))"
         )
         _rc, _out = py(_cuda_test)
-        if "CUDA_OK" not in _out:
+        if _rc != 0 or "CUDA_OK" not in _out:
             log("torch cannot run on this GPU; installing a CUDA 12.8 build")
             print(_out[-2000:])
             pip_install(["--upgrade", "torch", "torchvision", "--index-url", "https://download.pytorch.org/whl/cu128"], None, log_file)
             _rc, _out = py(_cuda_test)
         log(_out.strip().splitlines()[-1] if _out.strip() else "no output")
-        mo.stop("CUDA_OK" not in _out, mo.callout(mo.md("PyTorch cannot use the GPU:\n```\n" + _out[-1500:] + "\n```"), kind="danger"))
+        mo.stop(_rc != 0 or "CUDA_OK" not in _out, mo.callout(mo.md("PyTorch cannot use the GPU:\n```\n" + _out[-1500:] + "\n```"), kind="danger"))
 
     # BAGEL-family code imports flash-attn; prebuilt wheels rarely match sm_120 + the newest torch,
     # so fall back to a PyTorch SDPA implementation of flash_attn_varlen_func when it is unusable.
@@ -1163,11 +1190,12 @@ def _(
             _fa = (
                 "import torch; from flash_attn import flash_attn_varlen_func as f; "
                 "q = torch.randn(8, 4, 64, device='cuda', dtype=torch.bfloat16); "
-                "cu = torch.tensor([0, 8], device='cuda', dtype=torch.int32); f(q, q, q, cu, cu, 8, 8, causal=True); print('FA_OK')"
+                "cu = torch.tensor([0, 8], device='cuda', dtype=torch.int32); f(q, q, q, cu, cu, 8, 8, causal=True); print('FA' + '_OK')"
             )
         else:
-            _fa = "from flash_attn import flash_attn_varlen_func; print('FA_OK')"
-        _use_shim = "FA_OK" not in py(_fa)[1]
+            _fa = "from flash_attn import flash_attn_varlen_func; print('FA' + '_OK')"
+        _rc, _out = py(_fa)
+        _use_shim = _rc != 0 or "FA_OK" not in _out
         if _use_shim:
             (P["shims"] / "flash_attn").mkdir(parents=True, exist_ok=True)
             (P["shims"] / "flash_attn" / "__init__.py").write_text(SRC["flash_attn_shim.py"])
@@ -1192,6 +1220,10 @@ def _(
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         "TOKENIZERS_PARALLELISM": "false",
         "PYTHONUNBUFFERED": "1",
+        "USE_TF": "0",
+        "USE_FLAX": "0",
+        "USE_JAX": "0",
+        "TF_CPP_MIN_LOG_LEVEL": "3",
     })
     if hf_token:
         env["HF_TOKEN"] = hf_token
@@ -1236,6 +1268,7 @@ def _(
         "hf_repo": hf_repo,
         "sync_prefix": sync_prefix,
         "sync_images": bool(ui_sync_images.value),
+        "flash_attn_shim": str(P["shims"] / "flash_attn" / "__init__.py") if _use_shim else None,
     }
     spec_path = P["code"] / f"spec_{sync_prefix}.json"
     spec_path.write_text(json.dumps(_spec, indent=2))

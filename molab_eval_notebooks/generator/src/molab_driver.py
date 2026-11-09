@@ -24,6 +24,33 @@ def main(spec_path):
         if p not in sys.path:
             sys.path.insert(0, p)
 
+    shim = spec.get("flash_attn_shim")
+    if shim:
+        # Force the PyTorch-SDPA stand-in, even if a broken or partial flash_attn
+        # (e.g. a namespace-only directory) sits in site-packages.
+        import importlib.util
+
+        for k in [k for k in sys.modules if k == "flash_attn" or k.startswith("flash_attn.")]:
+            del sys.modules[k]
+        shim_root = os.path.dirname(os.path.dirname(shim))
+        if shim_root not in sys.path:
+            sys.path.insert(0, shim_root)
+        fa_spec = importlib.util.spec_from_file_location(
+            "flash_attn", shim, submodule_search_locations=[os.path.dirname(shim)])
+        fa_mod = importlib.util.module_from_spec(fa_spec)
+        sys.modules["flash_attn"] = fa_mod
+        fa_spec.loader.exec_module(fa_mod)
+        # transformers must not route anything through its own flash-attn-2 code path
+        import transformers.utils as tf_utils
+        import transformers.utils.import_utils as tf_import_utils
+
+        def _no_fa2(*args, **kwargs):
+            return False
+
+        tf_import_utils.is_flash_attn_2_available = _no_fa2
+        tf_utils.is_flash_attn_2_available = _no_fa2
+        print(f"[molab] flash_attn -> PyTorch SDPA fallback ({fa_mod.__version__})", flush=True)
+
     if spec.get("stub_thinkmorph"):
         # DeltaV runs on transformers 4.57; the fork's BAGEL/ThinkMorph modeling code
         # targets 4.49, so keep it from being imported at all.

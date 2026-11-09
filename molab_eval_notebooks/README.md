@@ -19,9 +19,20 @@ Twenty self-contained [marimo](https://marimo.io) notebooks for [molab](https://
 
 File names are `<model>__<benchmark>.py`, e.g. `thinkmorph__blink.py`.
 
+## Open in molab
+
+[![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__vstar.py) (ThinkMorph × V*, a good first smoke test)
+
+| Model | SAT | BLINK | V* | MMVP | CV-Bench 3D |
+|---|---|---|---|---|---|
+| BAGEL | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel__sat.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel__blink.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel__vstar.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel__mmvp.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel__cvbench3d.py) |
+| Bagel-Zebra-CoT | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel_zebracot__sat.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel_zebracot__blink.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel_zebracot__vstar.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel_zebracot__mmvp.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/bagel_zebracot__cvbench3d.py) |
+| ThinkMorph | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__sat.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__blink.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__vstar.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__mmvp.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__cvbench3d.py) |
+| DeltaV | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__sat.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__blink.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__vstar.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__mmvp.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__cvbench3d.py) |
+
 ## Running a notebook on molab
 
-1. Put this folder in a GitHub repo. On molab, use the new-notebook dropdown, paste the GitHub URL of a notebook, and add it to your workspace.
+1. Click a link in the table above (or paste the notebook's GitHub URL into the new-notebook dropdown on molab) and add the notebook to your workspace.
 2. Open it and attach the GPU: notebook specs button in the header → RTX Pro 6000 (Blackwell) → save and restart.
 3. Fill in the form at the top:
    - **Hugging Face token.** Read access is enough for downloads.
