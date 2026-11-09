@@ -1,13 +1,7 @@
 """Generate the 20 molab (marimo) evaluation notebooks: 4 models x 5 benchmarks."""
 import copy
 import pprint
-import sys
-import textwrap
 from pathlib import Path
-
-from marimo._ast.app_config import _AppConfig
-from marimo._ast.cell import CellConfig
-from marimo._ast.codegen import generate_filecontents
 
 HERE = Path(__file__).parent
 SRC = HERE / "src"
@@ -661,6 +655,10 @@ _view'''
 
 
 def make_notebook(model_key, bench_key):
+    from marimo._ast.app_config import _AppConfig
+    from marimo._ast.cell import CellConfig
+    from marimo._ast.codegen import generate_filecontents
+
     run = build_run(model_key, bench_key)
     run_src = "# Edit model_kwargs to change decoding / generation settings.\nRUN = " + pprint.pformat(run, width=100, sort_dicts=False)
     codes = [CELL_MO, CELL_IMPORTS, run_src, CELL_HEADER, CELL_UI, CELL_ENV, cell_sources(),
