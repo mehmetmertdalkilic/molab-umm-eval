@@ -9,10 +9,78 @@ fork's own run.py.
 """
 import json
 import os
+import pickle
 import runpy
 import sys
 import types
 from functools import partial
+
+# With SKIP_ERR=1, VLMEvalKit stores an exception as the answer text
+# ("Failed to obtain answer: <class 'RuntimeError'> ..."). On --reuse it only drops
+# "Failed to obtain answer via API.", so crashed answers would be kept and re-scored.
+CRASH_PREFIX = "Failed to obtain answer"
+
+
+def _is_crash(v):
+    return isinstance(v, str) and v.startswith(CRASH_PREFIX)
+
+
+def scrub_crashed_answers(work_dir, model_name, dataset):
+    """Remove crashed answers from saved predictions so the run retries them, and delete
+    this run's score files so they are recomputed. Returns the number of crashed answers."""
+    import pandas as pd
+
+    root = os.path.join(work_dir, model_name)
+    if not os.path.isdir(root):
+        return 0
+    crashed = 0
+    for dirpath, _, files in os.walk(root):
+        for fn in files:
+            p = os.path.join(dirpath, fn)
+            if os.path.islink(p) or dataset not in fn or "_result" in fn:
+                continue
+            if fn == f"{model_name}_{dataset}.xlsx":
+                df = pd.read_excel(p)
+                if "prediction" in df:
+                    bad = df["prediction"].astype(str).str.startswith(CRASH_PREFIX)
+                    if bad.any():
+                        crashed = max(crashed, int(bad.sum()))
+                        df[~bad].to_excel(p, index=False)
+            elif fn.endswith(".pkl"):
+                try:
+                    with open(p, "rb") as f:
+                        obj = pickle.load(f)
+                except Exception:
+                    continue
+                if isinstance(obj, dict):
+                    keep = {k: v for k, v in obj.items() if not _is_crash(v)}
+                    if len(keep) != len(obj):
+                        crashed = max(crashed, len(obj) - len(keep))
+                        with open(p, "wb") as f:
+                            pickle.dump(keep, f)
+    if crashed:
+        prefix = f"{model_name}_{dataset}_"
+        for dirpath, _, files in os.walk(root):
+            for fn in files:
+                if fn.startswith(prefix) and (fn.endswith("acc.csv") or fn.endswith("score.csv")
+                                              or "_result." in fn):
+                    os.remove(os.path.join(dirpath, fn))
+        print(f"[molab] removed {crashed} crashed answer(s) from saved predictions; "
+              "they will be generated again and the run re-scored", flush=True)
+    return crashed
+
+
+def report_crashed_answers(work_dir, model_name, dataset):
+    import pandas as pd
+
+    for dirpath, _, files in os.walk(os.path.join(work_dir, model_name)):
+        p = os.path.join(dirpath, f"{model_name}_{dataset}.xlsx")
+        if f"{model_name}_{dataset}.xlsx" in files and not os.path.islink(p):
+            pred = pd.read_excel(p)["prediction"].astype(str)
+            bad = pred[pred.str.startswith(CRASH_PREFIX)]
+            if len(bad):
+                print(f"[molab] WARNING: {len(bad)} of {len(pred)} answers are model errors, not answers; "
+                      f"the score is not valid. First error: {bad.iloc[0][:300]}", flush=True)
 
 
 def main(spec_path):
@@ -118,10 +186,14 @@ def main(spec_path):
     ]
     if spec.get("verbose"):
         argv.append("--verbose")
+    scrub_crashed_answers(spec["work_dir"], spec["model_name"], spec["dataset"])
     print("[molab] " + " ".join(argv), flush=True)
     sys.argv = argv
     os.chdir(fork)
-    runpy.run_path(os.path.join(fork, "run.py"), run_name="__main__")
+    try:
+        runpy.run_path(os.path.join(fork, "run.py"), run_name="__main__")
+    finally:
+        report_crashed_answers(spec["work_dir"], spec["model_name"], spec["dataset"])
 
 
 if __name__ == "__main__":

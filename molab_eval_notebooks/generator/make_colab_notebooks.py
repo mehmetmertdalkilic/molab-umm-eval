@@ -400,6 +400,16 @@ import zipfile
 import pandas as pd
 from IPython.display import display
 
+for x in Path(RESULT["work_dir"]).rglob(f"{RESULT['run_name']}_{RUN['dataset']}.xlsx"):
+    if x.is_symlink():
+        continue
+    pred = pd.read_excel(x)["prediction"].astype(str)
+    bad = pred[pred.str.startswith("Failed to obtain answer")]
+    if len(bad):
+        print(f"WARNING: {len(bad)} of {len(pred)} answers are model errors, not answers, so the score below is NOT valid.")
+        print("Running the notebook again retries them automatically. First error:")
+        print(bad.iloc[0][:400])
+        print()
 if not RESULT["score_files"]:
     print("No scores yet. Last log lines:")
     print(tail(RESULT["log_file"]))

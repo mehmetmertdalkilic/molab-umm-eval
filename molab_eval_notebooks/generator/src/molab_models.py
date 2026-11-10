@@ -328,6 +328,19 @@ def build_thinkmorph_class():
         def __init__(self, extract_answer=True, **kwargs):
             self._extract = bool(extract_answer)
             super().__init__(**kwargs)
+            # The fork's single-sample InterleaveInferencer.gen_text dropped the
+            # `gen_context = deepcopy(gen_context)` that BAGEL's official gen_text starts with,
+            # so generating text appends its tokens to the context's KV cache while kv_lens stays
+            # unchanged. In interleaved mode (understanding_output=False) the next context update
+            # then fails with "shape mismatch: value tensor of shape [N, 4, 128] ...". The fork's
+            # batch path (used by its batch_size=8 config) copies the cache, as BAGEL does.
+            inf = self.inferencer
+            _orig_gen_text = inf.gen_text
+
+            def _gen_text_on_copy(gen_context, *args, **kw):
+                return _orig_gen_text(deepcopy(gen_context), *args, **kw)
+
+            inf.gen_text = _gen_text_on_copy
 
         def generate_inner(self, message, dataset=None):
             input_list = self.build_thinkmorph_input(message)

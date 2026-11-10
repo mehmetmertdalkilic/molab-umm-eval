@@ -542,6 +542,19 @@ def _():
             def __init__(self, extract_answer=True, **kwargs):
                 self._extract = bool(extract_answer)
                 super().__init__(**kwargs)
+                # The fork's single-sample InterleaveInferencer.gen_text dropped the
+                # `gen_context = deepcopy(gen_context)` that BAGEL's official gen_text starts with,
+                # so generating text appends its tokens to the context's KV cache while kv_lens stays
+                # unchanged. In interleaved mode (understanding_output=False) the next context update
+                # then fails with "shape mismatch: value tensor of shape [N, 4, 128] ...". The fork's
+                # batch path (used by its batch_size=8 config) copies the cache, as BAGEL does.
+                inf = self.inferencer
+                _orig_gen_text = inf.gen_text
+
+                def _gen_text_on_copy(gen_context, *args, **kw):
+                    return _orig_gen_text(deepcopy(gen_context), *args, **kw)
+
+                inf.gen_text = _gen_text_on_copy
 
             def generate_inner(self, message, dataset=None):
                 input_list = self.build_thinkmorph_input(message)
@@ -659,10 +672,78 @@ def _():
     """
     import json
     import os
+    import pickle
     import runpy
     import sys
     import types
     from functools import partial
+
+    # With SKIP_ERR=1, VLMEvalKit stores an exception as the answer text
+    # ("Failed to obtain answer: <class 'RuntimeError'> ..."). On --reuse it only drops
+    # "Failed to obtain answer via API.", so crashed answers would be kept and re-scored.
+    CRASH_PREFIX = "Failed to obtain answer"
+
+
+    def _is_crash(v):
+        return isinstance(v, str) and v.startswith(CRASH_PREFIX)
+
+
+    def scrub_crashed_answers(work_dir, model_name, dataset):
+        """Remove crashed answers from saved predictions so the run retries them, and delete
+        this run's score files so they are recomputed. Returns the number of crashed answers."""
+        import pandas as pd
+
+        root = os.path.join(work_dir, model_name)
+        if not os.path.isdir(root):
+            return 0
+        crashed = 0
+        for dirpath, _, files in os.walk(root):
+            for fn in files:
+                p = os.path.join(dirpath, fn)
+                if os.path.islink(p) or dataset not in fn or "_result" in fn:
+                    continue
+                if fn == f"{model_name}_{dataset}.xlsx":
+                    df = pd.read_excel(p)
+                    if "prediction" in df:
+                        bad = df["prediction"].astype(str).str.startswith(CRASH_PREFIX)
+                        if bad.any():
+                            crashed = max(crashed, int(bad.sum()))
+                            df[~bad].to_excel(p, index=False)
+                elif fn.endswith(".pkl"):
+                    try:
+                        with open(p, "rb") as f:
+                            obj = pickle.load(f)
+                    except Exception:
+                        continue
+                    if isinstance(obj, dict):
+                        keep = {k: v for k, v in obj.items() if not _is_crash(v)}
+                        if len(keep) != len(obj):
+                            crashed = max(crashed, len(obj) - len(keep))
+                            with open(p, "wb") as f:
+                                pickle.dump(keep, f)
+        if crashed:
+            prefix = f"{model_name}_{dataset}_"
+            for dirpath, _, files in os.walk(root):
+                for fn in files:
+                    if fn.startswith(prefix) and (fn.endswith("acc.csv") or fn.endswith("score.csv")
+                                                  or "_result." in fn):
+                        os.remove(os.path.join(dirpath, fn))
+            print(f"[molab] removed {crashed} crashed answer(s) from saved predictions; "
+                  "they will be generated again and the run re-scored", flush=True)
+        return crashed
+
+
+    def report_crashed_answers(work_dir, model_name, dataset):
+        import pandas as pd
+
+        for dirpath, _, files in os.walk(os.path.join(work_dir, model_name)):
+            p = os.path.join(dirpath, f"{model_name}_{dataset}.xlsx")
+            if f"{model_name}_{dataset}.xlsx" in files and not os.path.islink(p):
+                pred = pd.read_excel(p)["prediction"].astype(str)
+                bad = pred[pred.str.startswith(CRASH_PREFIX)]
+                if len(bad):
+                    print(f"[molab] WARNING: {len(bad)} of {len(pred)} answers are model errors, not answers; "
+                          f"the score is not valid. First error: {bad.iloc[0][:300]}", flush=True)
 
 
     def main(spec_path):
@@ -768,10 +849,14 @@ def _():
         ]
         if spec.get("verbose"):
             argv.append("--verbose")
+        scrub_crashed_answers(spec["work_dir"], spec["model_name"], spec["dataset"])
         print("[molab] " + " ".join(argv), flush=True)
         sys.argv = argv
         os.chdir(fork)
-        runpy.run_path(os.path.join(fork, "run.py"), run_name="__main__")
+        try:
+            runpy.run_path(os.path.join(fork, "run.py"), run_name="__main__")
+        finally:
+            report_crashed_answers(spec["work_dir"], spec["model_name"], spec["dataset"])
 
 
     if __name__ == "__main__":
@@ -1400,8 +1485,19 @@ def _(Path, RUN, mo, run_result, zipfile):
     import pandas as pd
 
     _files = run_result["score_files"]
+    _crash = None
+    for _x in Path(run_result["work_dir"]).rglob(f"{run_result['run_name']}_{RUN['dataset']}.xlsx"):
+        if _x.is_symlink():
+            continue
+        _pred = pd.read_excel(_x)["prediction"].astype(str)
+        _bad = _pred[_pred.str.startswith("Failed to obtain answer")]
+        if len(_bad):
+            _crash = mo.callout(mo.md(
+                f"**{len(_bad)} of {len(_pred)} answers are model errors, not answers, so this score is not valid.** "
+                "Running the notebook again retries them automatically.\n\n"
+                f"First error:\n```\n{_bad.iloc[0][:400]}\n```"), kind="danger")
     if not _files:
-        _view = mo.md("No scores yet.")
+        _view = _crash or mo.md("No scores yet.")
     else:
         _df = pd.read_csv(_files[-1])
         _buf = io.BytesIO()
@@ -1409,7 +1505,7 @@ def _(Path, RUN, mo, run_result, zipfile):
             for _p in Path(run_result["work_dir"]).rglob("*"):
                 if _p.is_file() and not _p.is_symlink() and "visual_thoughts" not in _p.parts:
                     _z.write(_p, _p.relative_to(run_result["work_dir"]))
-        _view = mo.vstack([
+        _view = mo.vstack(([_crash] if _crash else []) + [
             mo.md(f"### {RUN['model_label']} on {RUN['bench_label']} (accuracy, %)"),
             mo.ui.table(_df, selection=None),
             mo.md("Overall accuracy is the `Overall` column. Full reasoning traces are in the `traces_*.jsonl` file inside the zip."),

@@ -637,8 +637,19 @@ import io
 import pandas as pd
 
 _files = run_result["score_files"]
+_crash = None
+for _x in Path(run_result["work_dir"]).rglob(f"{run_result['run_name']}_{RUN['dataset']}.xlsx"):
+    if _x.is_symlink():
+        continue
+    _pred = pd.read_excel(_x)["prediction"].astype(str)
+    _bad = _pred[_pred.str.startswith("Failed to obtain answer")]
+    if len(_bad):
+        _crash = mo.callout(mo.md(
+            f"**{len(_bad)} of {len(_pred)} answers are model errors, not answers, so this score is not valid.** "
+            "Running the notebook again retries them automatically.\\n\\n"
+            f"First error:\\n```\\n{_bad.iloc[0][:400]}\\n```"), kind="danger")
 if not _files:
-    _view = mo.md("No scores yet.")
+    _view = _crash or mo.md("No scores yet.")
 else:
     _df = pd.read_csv(_files[-1])
     _buf = io.BytesIO()
@@ -646,7 +657,7 @@ else:
         for _p in Path(run_result["work_dir"]).rglob("*"):
             if _p.is_file() and not _p.is_symlink() and "visual_thoughts" not in _p.parts:
                 _z.write(_p, _p.relative_to(run_result["work_dir"]))
-    _view = mo.vstack([
+    _view = mo.vstack(([_crash] if _crash else []) + [
         mo.md(f"### {RUN['model_label']} on {RUN['bench_label']} (accuracy, %)"),
         mo.ui.table(_df, selection=None),
         mo.md("Overall accuracy is the `Overall` column. Full reasoning traces are in the `traces_*.jsonl` file inside the zip."),
