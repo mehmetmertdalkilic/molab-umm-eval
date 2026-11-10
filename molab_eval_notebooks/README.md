@@ -52,13 +52,13 @@ All four models run inside the ThinkMorph authors' VLMEvalKit fork ([hychaochao/
 | Model | Inference |
 |---|---|
 | BAGEL | Text-only reasoning with BAGEL's official think-mode system prompt, greedy, up to 4,096 new tokens. CV-Bench 3D uses no-think mode, as in the ThinkMorph paper's BAGEL baseline. |
-| Bagel-Zebra-CoT | The loop from the official `infz_bf16.py`: its system prompt, prompt-then-images order, CFG 4.0/2.0, 50 denoising steps. A visual thought follows every reasoning step until the model writes "Final Answer:". |
+| Bagel-Zebra-CoT | The loop from the official `infz_bf16.py`: its system prompt, prompt-then-images order, CFG 4.0/2.0, 50 denoising steps. A visual thought follows every reasoning step until the model writes "Final Answer:". Text sampled at temperature 0.3 (seed 42), as in that script. |
 | ThinkMorph | The fork's own `ThinkMorph` wrapper in interleaved mode (`think=True, understanding_output=False`): up to 3 visual thoughts, 50 denoising steps, up to 4,096 tokens, greedy (the paper's temperature 0). |
 | DeltaV | The official `vlmevalkit/vlm/deltav_evalkit.py` with the settings from the repo's `MERGE.md` (incremental encoding, 145 tokens per visual update, up to 16,384 tokens). Decoding inside that wrapper is always greedy. |
 
 Judgment calls you may want to change (all in the `RUN` cell at the top of each notebook, or globally in `generator/make_notebooks.py`):
 
-- **Greedy decoding everywhere.** ThinkMorph's paper uses temperature 0. The fork's example config and Zebra-CoT's script sample at temperature 0.3. Set `do_sample: True` to match those instead.
+- **Decoding.** BAGEL, ThinkMorph and DeltaV decode greedily (BAGEL's own evaluation, ThinkMorph's paper at temperature 0, DeltaV's wrapper). Bagel-Zebra-CoT samples at temperature 0.3 with seed 42, as the official `infz_bf16.py` does.
 - **Answer extraction.** When a model marks its answer (`<answer>…</answer>`, `Final Answer:`, `\boxed{}`), only that span goes to VLMEvalKit, so exact matching works without an LLM judge. The full trace is kept in `traces_*.jsonl`. Set `extract_answer: False` to send the full text instead, as the fork does. That only makes sense with the GPT-5 judge.
 - **Zebra-CoT is capped at 4 visual thoughts** per question; the official script has no cap.
 - **flash-attn.** BAGEL-family code imports `flash_attn`. Prebuilt wheels rarely match a Blackwell GPU (sm_120) with the newest PyTorch, so when flash-attn is missing or broken the notebook substitutes a PyTorch-SDPA version of `flash_attn_varlen_func`. It follows flash-attn's semantics (GQA, bottom-right causal mask), so results are unchanged, but it is slower.

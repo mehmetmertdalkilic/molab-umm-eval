@@ -75,12 +75,13 @@ MODELS = {
         flash_attn_check=True, stub_thinkmorph=False, deltav=None,
         model_kwargs=dict({"model_path": "{MODEL_DIR}", "ckpt_file": "model_bf16.safetensors",
                            "vit_min_size": 512, "max_think_token_n": 1000, "max_images": 4,
-                           "save_dir": "{IMG_DIR}", "do_sample": False, "temperature": 0.3,
+                           "save_dir": "{IMG_DIR}", "do_sample": True, "temperature": 0.3, "seed": 42,
                            "extract_answer": True}, **CFG_GEN),
         about=("Interleaved text/image reasoning with the loop from the official "
                "`infz_bf16.py` (system prompt, prompt-then-images order, CFG 4.0/2.0, 50 denoising "
                "steps). Generates a visual thought after every reasoning step until it writes "
-               "\"Final Answer:\" (capped at 4 visual thoughts). Greedy text decoding."),
+               "\"Final Answer:\" (capped at 4 visual thoughts). Text sampled at temperature 0.3 "
+               "(seed 42), as in the official script."),
     ),
     "thinkmorph": dict(
         label="ThinkMorph-7B", model_name="ThinkMorph-7B", model_class="ThinkMorphEval",

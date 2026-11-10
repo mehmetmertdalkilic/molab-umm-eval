@@ -80,7 +80,7 @@ def _():
      'about': 'Interleaved text/image reasoning with the loop from the official `infz_bf16.py` (system '
               'prompt, prompt-then-images order, CFG 4.0/2.0, 50 denoising steps). Generates a visual '
               'thought after every reasoning step until it writes "Final Answer:" (capped at 4 visual '
-              'thoughts). Greedy text decoding.',
+              'thoughts). Text sampled at temperature 0.3 (seed 42), as in the official script.',
      'references': [{'source': 'DeltaV paper (arXiv 2607.08434, Table 5)', 'value': '64.9'}],
      'sync_every_min': 15,
      'model_kwargs': {'model_path': '{MODEL_DIR}',
@@ -89,8 +89,9 @@ def _():
                       'max_think_token_n': 1000,
                       'max_images': 4,
                       'save_dir': '{IMG_DIR}',
-                      'do_sample': False,
+                      'do_sample': True,
                       'temperature': 0.3,
+                      'seed': 42,
                       'extract_answer': True,
                       'cfg_text_scale': 4.0,
                       'cfg_img_scale': 2.0,
