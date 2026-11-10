@@ -570,6 +570,28 @@ def _():
 
         if deltav_repo not in sys.path:
             sys.path.insert(0, deltav_repo)
+        # DeltaV targets Python 3.10. On 3.11+ dataclasses reject an instance as a field default
+        # ("mutable default ... use default_factory"); TSIMTokExtraCfg has four. Give each field a
+        # default_factory instead: TSIMTokExtraCfg.load() passes all four explicitly anyway.
+        import re
+        _cfg = os.path.join(deltav_repo, "deltav", "tsim_tok", "modeling_tsim_tok.py")
+        if os.path.exists(_cfg):
+            _txt = open(_cfg).read()
+            _new = re.sub(r"^(\s+\w+): (\w+Cfg) = \2\(\)\s*$", r"\1: \2 = field(default_factory=\2)",
+                          _txt, flags=re.M)
+            if _new != _txt:
+                open(_cfg, "w").write(_new)
+                print("[molab] patched DeltaV config dataclasses for Python 3.11+", flush=True)
+        # DeltaV imports a compiled CUDA op for its deformable attention; use the pure-PyTorch
+        # version when it is not built (it never is on molab/Colab: no matching nvcc).
+        if "MultiScaleDeformableAttention" not in sys.modules and \
+                importlib.util.find_spec("MultiScaleDeformableAttention") is None:
+            _s = importlib.util.spec_from_file_location(
+                "MultiScaleDeformableAttention", os.path.join(os.path.dirname(os.path.abspath(__file__)), "msda_shim.py"))
+            _m = importlib.util.module_from_spec(_s)
+            _s.loader.exec_module(_m)
+            sys.modules["MultiScaleDeformableAttention"] = _m
+            print("[molab] MultiScaleDeformableAttention -> PyTorch fallback", flush=True)
         path = os.path.join(deltav_repo, "vlmevalkit", "vlm", "deltav_evalkit.py")
         spec = importlib.util.spec_from_file_location("deltav_evalkit", path)
         mod = importlib.util.module_from_spec(spec)
@@ -910,6 +932,49 @@ def _():
             softmax_scale=softmax_scale, causal=causal,
         )
         return o.reshape(q.shape)
+    '''
+
+    SRC['msda_shim.py'] = r'''"""Pure-PyTorch stand-in for DeltaV's compiled `MultiScaleDeformableAttention` CUDA op.
+
+    DeltaV's INSTALL.md calls the compiled op optional ("a pure-PyTorch path is used
+    otherwise"), but ms_deform_attn_func.py imports it unconditionally. This module provides
+    the forward pass with the same maths as the CUDA kernel (bilinear sampling at
+    loc * size - 0.5, zero outside the map, attention-weighted sum), computed in float32
+    like the kernel, which only supports float/double. Inference only: no backward.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    __version__ = "pytorch-fallback"
+
+
+    def ms_deform_attn_forward(value, spatial_shapes, level_start_index, sampling_locations,
+                               attention_weights, im2col_step=64):
+        """value (N, S, M, D); sampling_locations (N, Lq, M, L, P, 2) as (x, y) in [0, 1];
+        attention_weights (N, Lq, M, L, P). Returns (N, Lq, M * D)."""
+        out_dtype = value.dtype
+        value = value.float()
+        sampling_locations = sampling_locations.float()
+        attention_weights = attention_weights.float()
+        n, _, m, d = value.shape
+        _, lq, _, n_levels, n_points, _ = sampling_locations.shape
+        shapes = [(int(h), int(w)) for h, w in spatial_shapes.tolist()]
+        starts = [int(s) for s in level_start_index.tolist()]
+        grids = 2 * sampling_locations - 1  # grid_sample(align_corners=False): pixel = loc * size - 0.5
+        sampled = []
+        for lid in range(n_levels):
+            h, w = shapes[lid]
+            v = value[:, starts[lid]:starts[lid] + h * w]                      # N, HW, M, D
+            v = v.flatten(2).transpose(1, 2).reshape(n * m, d, h, w)          # N*M, D, H, W
+            g = grids[:, :, :, lid].transpose(1, 2).flatten(0, 1)             # N*M, Lq, P, 2
+            sampled.append(F.grid_sample(v, g, mode="bilinear", padding_mode="zeros", align_corners=False))
+        weights = attention_weights.transpose(1, 2).reshape(n * m, 1, lq, n_levels * n_points)
+        out = (torch.stack(sampled, dim=-2).flatten(-2) * weights).sum(-1).view(n, m * d, lq)
+        return out.transpose(1, 2).contiguous().to(out_dtype)
+
+
+    def ms_deform_attn_backward(*args, **kwargs):
+        raise NotImplementedError("PyTorch fallback for MultiScaleDeformableAttention is inference-only")
     '''
     return (SRC,)
 

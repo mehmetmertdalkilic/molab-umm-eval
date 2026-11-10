@@ -254,7 +254,7 @@ mo.callout(
 def cell_sources():
     parts = ["# Helper files written to disk at run time (model wrappers, VLMEvalKit driver, HF sync, flash-attn fallback)."]
     parts.append("SRC = {}")
-    for name in ["molab_models.py", "molab_driver.py", "molab_sync.py", "flash_attn_shim.py"]:
+    for name in ["molab_models.py", "molab_driver.py", "molab_sync.py", "flash_attn_shim.py", "msda_shim.py"]:
         text = (SRC / name).read_text()
         assert "'''" not in text, name
         assert not text.endswith("\\"), name

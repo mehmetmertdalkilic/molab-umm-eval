@@ -357,6 +357,28 @@ def build_deltav_class(deltav_repo):
 
     if deltav_repo not in sys.path:
         sys.path.insert(0, deltav_repo)
+    # DeltaV targets Python 3.10. On 3.11+ dataclasses reject an instance as a field default
+    # ("mutable default ... use default_factory"); TSIMTokExtraCfg has four. Give each field a
+    # default_factory instead: TSIMTokExtraCfg.load() passes all four explicitly anyway.
+    import re
+    _cfg = os.path.join(deltav_repo, "deltav", "tsim_tok", "modeling_tsim_tok.py")
+    if os.path.exists(_cfg):
+        _txt = open(_cfg).read()
+        _new = re.sub(r"^(\s+\w+): (\w+Cfg) = \2\(\)\s*$", r"\1: \2 = field(default_factory=\2)",
+                      _txt, flags=re.M)
+        if _new != _txt:
+            open(_cfg, "w").write(_new)
+            print("[molab] patched DeltaV config dataclasses for Python 3.11+", flush=True)
+    # DeltaV imports a compiled CUDA op for its deformable attention; use the pure-PyTorch
+    # version when it is not built (it never is on molab/Colab: no matching nvcc).
+    if "MultiScaleDeformableAttention" not in sys.modules and \
+            importlib.util.find_spec("MultiScaleDeformableAttention") is None:
+        _s = importlib.util.spec_from_file_location(
+            "MultiScaleDeformableAttention", os.path.join(os.path.dirname(os.path.abspath(__file__)), "msda_shim.py"))
+        _m = importlib.util.module_from_spec(_s)
+        _s.loader.exec_module(_m)
+        sys.modules["MultiScaleDeformableAttention"] = _m
+        print("[molab] MultiScaleDeformableAttention -> PyTorch fallback", flush=True)
     path = os.path.join(deltav_repo, "vlmevalkit", "vlm", "deltav_evalkit.py")
     spec = importlib.util.spec_from_file_location("deltav_evalkit", path)
     mod = importlib.util.module_from_spec(spec)
