@@ -35,8 +35,21 @@ def main(action, spec_path):
     if action == "pull":
         tmp = Path(tempfile.mkdtemp(prefix="molab_pull_"))
         try:
-            snapshot_download(repo, repo_type="dataset", allow_patterns=[f"{prefix}/**"],
-                              local_dir=str(tmp), token=token)
+            # Only predictions, partial checkpoints and scores: never the generated images.
+            # A Zebra-CoT folder can hold over a thousand images, one request each, which
+            # exceeds Hugging Face's limit of 1,000 requests per 5 minutes.
+            patterns = [f"{prefix}/*{ext}" for ext in RESULT_EXT]
+            for attempt in range(6):
+                try:
+                    snapshot_download(repo, repo_type="dataset", allow_patterns=patterns,
+                                      local_dir=str(tmp), token=token, max_workers=2)
+                    break
+                except Exception as e:
+                    if attempt == 5 or "429" not in str(e):
+                        raise
+                    wait = 60 * (attempt + 1)
+                    print(f"[sync] Hugging Face rate limit; retrying in {wait} s", flush=True)
+                    time.sleep(wait)
             src = tmp / prefix
             copied = 0
             if src.exists():

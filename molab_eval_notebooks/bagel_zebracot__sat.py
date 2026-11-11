@@ -900,8 +900,21 @@ def _():
         if action == "pull":
             tmp = Path(tempfile.mkdtemp(prefix="molab_pull_"))
             try:
-                snapshot_download(repo, repo_type="dataset", allow_patterns=[f"{prefix}/**"],
-                                  local_dir=str(tmp), token=token)
+                # Only predictions, partial checkpoints and scores: never the generated images.
+                # A Zebra-CoT folder can hold over a thousand images, one request each, which
+                # exceeds Hugging Face's limit of 1,000 requests per 5 minutes.
+                patterns = [f"{prefix}/*{ext}" for ext in RESULT_EXT]
+                for attempt in range(6):
+                    try:
+                        snapshot_download(repo, repo_type="dataset", allow_patterns=patterns,
+                                          local_dir=str(tmp), token=token, max_workers=2)
+                        break
+                    except Exception as e:
+                        if attempt == 5 or "429" not in str(e):
+                            raise
+                        wait = 60 * (attempt + 1)
+                        print(f"[sync] Hugging Face rate limit; retrying in {wait} s", flush=True)
+                        time.sleep(wait)
                 src = tmp / prefix
                 copied = 0
                 if src.exists():
@@ -1434,7 +1447,11 @@ def _(
     _sync_cmd = [sys.executable, str(P["code"] / "molab_sync.py")]
     if hf_repo:
         log(f"Step 5/6: restoring checkpoints from {hf_repo}/{sync_prefix}")
-        stream_cmd(_sync_cmd + ["pull", spec_path], env=env, log_file=log_file)
+        _rc = stream_cmd(_sync_cmd + ["pull", spec_path], env=env, log_file=log_file)
+        mo.stop(_rc != 0, mo.callout(mo.md(
+            "**Could not restore the saved checkpoints from Hugging Face** (see the log above). "
+            "Stopped here, so a fresh run cannot overwrite your saved progress. "
+            "Wait a few minutes and click the button again."), kind="danger"))
     else:
         log("Step 5/6: checkpoint sync disabled (no HF dataset repo given)")
 

@@ -352,7 +352,10 @@ def run_eval(RUN, S):
         log(f"Step 5/6: restored {copy_tree(drive_dir, P['work'], only_missing=True)} file(s) from {drive_dir}")
     elif hf_repo:
         log(f"Step 5/6: restoring checkpoints from {hf_repo}/{sync_prefix}")
-        stream_cmd(sync_cmd + ["pull", spec_path], env=env, log_file=log_file)
+        if stream_cmd(sync_cmd + ["pull", spec_path], env=env, log_file=log_file) != 0:
+            raise RuntimeError("Could not restore the saved checkpoints from Hugging Face (see the log above). "
+                               "Stopped so a fresh run cannot overwrite your saved progress; "
+                               "wait a few minutes and run this cell again.")
     else:
         log("Step 5/6: checkpoints disabled")
 

@@ -589,7 +589,11 @@ spec_path.write_text(json.dumps(_spec, indent=2))
 _sync_cmd = [sys.executable, str(P["code"] / "molab_sync.py")]
 if hf_repo:
     log(f"Step 5/6: restoring checkpoints from {hf_repo}/{sync_prefix}")
-    stream_cmd(_sync_cmd + ["pull", spec_path], env=env, log_file=log_file)
+    _rc = stream_cmd(_sync_cmd + ["pull", spec_path], env=env, log_file=log_file)
+    mo.stop(_rc != 0, mo.callout(mo.md(
+        "**Could not restore the saved checkpoints from Hugging Face** (see the log above). "
+        "Stopped here, so a fresh run cannot overwrite your saved progress. "
+        "Wait a few minutes and click the button again."), kind="danger"))
 else:
     log("Step 5/6: checkpoint sync disabled (no HF dataset repo given)")
 
