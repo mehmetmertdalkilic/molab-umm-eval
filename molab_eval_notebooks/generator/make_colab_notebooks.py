@@ -358,6 +358,15 @@ def run_eval(RUN, S):
                                "wait a few minutes and run this cell again.")
     else:
         log("Step 5/6: checkpoints disabled")
+    if RUN.get("combine_with"):  # the other CV-Bench half, for the combined score (best effort)
+        other = f"{run_name}__{RUN['combine_with']}"
+        if drive_dir is not None:
+            n = copy_tree(drive_dir.parent / other, P["work"].parent / other, exts=RESULT_EXT, only_missing=True)
+            log(f"           fetched {n} file(s) of your {RUN['combine_with']} results from {drive_dir.parent / other}")
+        elif hf_repo:
+            other_spec = P["code"] / f"spec_{other}_fetch.json"
+            other_spec.write_text(json.dumps(dict(spec, sync_prefix=other, work_dir=str(P["work"].parent / other))))
+            stream_cmd(sync_cmd + ["pull", other_spec], env=env, log_file=log_file)
 
     # 6. evaluation, with periodic checkpoint copies
     log(f"Step 6/6: VLMEvalKit {run_name} x {RUN['dataset']}")
@@ -420,6 +429,18 @@ else:
     df = pd.read_csv(RESULT["score_files"][-1])
     print(f"{RUN['model_label']} on {RUN['bench_label']} (accuracy, %; overall = 'Overall' column)")
     display(df)
+    if RUN.get("combine_with"):  # CV-Bench overall = average of the 2D and 3D overall scores
+        other = f"{RESULT['run_name']}__{RUN['combine_with']}"
+        found = [x for x in (Path(RESULT["work_dir"]).parent / other).rglob(f"{RESULT['run_name']}_{RUN['combine_with']}_acc.csv")
+                 if not x.is_symlink()]
+        here = float(df["Overall"].iloc[0]); here = here * 100 if here <= 1 else here
+        if found:
+            there = float(pd.read_csv(found[-1])["Overall"].iloc[0]); there = there * 100 if there <= 1 else there
+            print(f"\\nCV-Bench overall (average of 2D and 3D): {(here + there) / 2:.2f} "
+                  f"({RUN['bench_label']} {here:.2f}, {RUN['combine_with']} {there:.2f}). ThinkMorph's paper reports CV-Bench this way.")
+        else:
+            print(f"\\nYour {RUN['combine_with']} results ({other}) were not found in your checkpoint folder, so combine by hand: "
+                  f"CV-Bench overall = ({RUN['bench_label']} {here:.2f} + {RUN['combine_with']} Overall) / 2.")
     zpath = Path("/content") / f"{RESULT['run_name']}__{RUN['dataset']}_results.zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for p in Path(RESULT["work_dir"]).rglob("*"):
@@ -473,11 +494,10 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     for f in OUT.glob("*.ipynb"):
         f.unlink()
-    for model_key in mk.MODELS:
-        for bench_key in mk.BENCHES:
-            name, text = make_colab(model_key, bench_key)
-            (OUT / name).write_text(text)
-            print("wrote", name)
+    for model_key, bench_key in mk.notebook_pairs():
+        name, text = make_colab(model_key, bench_key)
+        (OUT / name).write_text(text)
+        print("wrote", name)
 
 
 if __name__ == "__main__":

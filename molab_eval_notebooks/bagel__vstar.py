@@ -77,6 +77,7 @@ def _():
      'dataset': 'VStarBench',
      'bench_label': 'V* Bench',
      'bench_size': '191 questions',
+     'combine_with': None,
      'about': "Base unified model. Text-only reasoning with BAGEL's own think-mode system prompt (the "
               'setting the ThinkMorph paper uses for its BAGEL baseline); CV-Bench 3D runs in no-think '
               'mode, as in that paper. Greedy decoding, up to 4,096 new tokens.',
@@ -1443,6 +1444,12 @@ def _(
             "Wait a few minutes and click the button again."), kind="danger"))
     else:
         log("Step 5/6: checkpoint sync disabled (no HF dataset repo given)")
+    if hf_repo and RUN.get("combine_with"):
+        _other = f"{run_name}__{RUN['combine_with']}"
+        _other_spec = P["code"] / f"spec_{_other}_fetch.json"
+        _other_spec.write_text(json.dumps(dict(_spec, sync_prefix=_other, work_dir=str(P["work"].parent / _other))))
+        log(f"           fetching your {RUN['combine_with']} results ({_other}) for the combined CV-Bench score")
+        stream_cmd(_sync_cmd + ["pull", _other_spec], env=env, log_file=log_file)
 
     # 6. evaluation (VLMEvalKit run.py through the driver), with periodic checkpoint upload
     log(f"Step 6/6: VLMEvalKit {run_name} x {RUN['dataset']}")
@@ -1511,9 +1518,27 @@ def _(Path, RUN, mo, run_result, zipfile):
             for _p in Path(run_result["work_dir"]).rglob("*"):
                 if _p.is_file() and not _p.is_symlink() and "visual_thoughts" not in _p.parts:
                     _z.write(_p, _p.relative_to(run_result["work_dir"]))
+        _combo = []
+        if RUN.get("combine_with"):  # CV-Bench overall = average of the 2D and 3D overall scores
+            _other = f"{run_result['run_name']}__{RUN['combine_with']}"
+            _o = [x for x in (Path(run_result["work_dir"]).parent / _other).rglob(f"{run_result['run_name']}_{RUN['combine_with']}_acc.csv")
+                  if not x.is_symlink()]
+            _here = float(_df["Overall"].iloc[0]) * (100 if _df["Overall"].iloc[0] <= 1 else 1)
+            if _o:
+                _there = pd.read_csv(_o[-1])["Overall"].iloc[0]
+                _there = float(_there) * (100 if _there <= 1 else 1)
+                _combo = [mo.callout(mo.md(
+                    f"**CV-Bench overall (average of 2D and 3D): {(_here + _there) / 2:.2f}** "
+                    f"({RUN['bench_label']} {_here:.2f}, {RUN['combine_with']} {_there:.2f}). "
+                    "ThinkMorph's paper reports CV-Bench this way."), kind="success")]
+            else:
+                _combo = [mo.callout(mo.md(
+                    f"Your {RUN['combine_with']} results were not found (looked for `{_other}` in your HF repo), "
+                    f"so combine by hand: CV-Bench overall = ({RUN['bench_label']} {_here:.2f} + {RUN['combine_with']} Overall) / 2."),
+                    kind="info")]
         _view = mo.vstack(([_crash] if _crash else []) + [
             mo.md(f"### {RUN['model_label']} on {RUN['bench_label']} (accuracy, %)"),
-            mo.ui.table(_df, selection=None),
+            mo.ui.table(_df, selection=None)] + _combo + [
             mo.md("Overall accuracy is the `Overall` column. Full reasoning traces are in the `traces_*.jsonl` file inside the zip."),
             mo.download(data=_buf.getvalue(), filename=f"{run_result['run_name']}__{RUN['dataset']}_results.zip", label="Download predictions, scores and traces"),
         ])

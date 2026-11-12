@@ -33,7 +33,20 @@ BENCHES = {
     "vstar": dict(dataset="VStarBench", label="V* Bench", size="191 questions"),
     "mmvp": dict(dataset="MMVP", label="MMVP", size="300 questions"),
     "cvbench3d": dict(dataset="CV-Bench-3D", label="CV-Bench 3D", size="1,200 questions (depth + distance)"),
+    "cvbench2d": dict(dataset="CV-Bench-2D", label="CV-Bench 2D", size="1,438 questions (ADE20K + COCO)",
+                      combine_with="CV-Bench-3D"),
 }
+
+# benchmarks built only for some models (BAGEL's CV-Bench 2D runs through its add-on cells)
+ONLY_FOR = {"cvbench2d": ("thinkmorph", "bagel_zebracot")}
+
+
+def notebook_pairs():
+    for mk in MODELS:
+        for bk in BENCHES:
+            if bk in ONLY_FOR and mk not in ONLY_FOR[bk]:
+                continue
+            yield mk, bk
 
 REFS = {
     ("bagel", "sat"): [(TM_PAPER, "44.67"), (BRAID_PAPER, "44.67")],
@@ -47,6 +60,7 @@ REFS = {
     ("thinkmorph", "vstar"): [(TM_PAPER, "67.02"), (DV_PAPER, "64.4")],
     ("thinkmorph", "mmvp"): [(TM_PAPER, "80.33"), (DV_PAPER, "8.6")],
     ("thinkmorph", "cvbench3d"): [(TM_PAPER, "80.82 (CV-Bench 2D+3D combined)")],
+    ("thinkmorph", "cvbench2d"): [(TM_PAPER, "80.82 (CV-Bench 2D+3D combined)")],
     ("bagel_zebracot", "vstar"): [(DV_PAPER, "64.9")],
     ("bagel_zebracot", "mmvp"): [(DV_PAPER, "22.0")],
     ("deltav", "vstar"): [(DV_PAPER, "75.9")],
@@ -126,7 +140,7 @@ def build_run(model_key, bench_key):
     m = copy.deepcopy(MODELS[model_key])
     b = BENCHES[bench_key]
     kwargs = m["model_kwargs"]
-    if model_key == "bagel" and bench_key == "cvbench3d":
+    if model_key == "bagel" and bench_key in ("cvbench3d", "cvbench2d"):
         kwargs["think"] = False
     refs = [{"source": s, "value": v} for s, v in REFS.get((model_key, bench_key), [])]
     return {
@@ -146,6 +160,7 @@ def build_run(model_key, bench_key):
         "dataset": b["dataset"],
         "bench_label": b["label"],
         "bench_size": b["size"],
+        "combine_with": b.get("combine_with"),
         "about": m["about"],
         "references": refs,
         "sync_every_min": 15,
@@ -596,6 +611,12 @@ if hf_repo:
         "Wait a few minutes and click the button again."), kind="danger"))
 else:
     log("Step 5/6: checkpoint sync disabled (no HF dataset repo given)")
+if hf_repo and RUN.get("combine_with"):
+    _other = f"{run_name}__{RUN['combine_with']}"
+    _other_spec = P["code"] / f"spec_{_other}_fetch.json"
+    _other_spec.write_text(json.dumps(dict(_spec, sync_prefix=_other, work_dir=str(P["work"].parent / _other))))
+    log(f"           fetching your {RUN['combine_with']} results ({_other}) for the combined CV-Bench score")
+    stream_cmd(_sync_cmd + ["pull", _other_spec], env=env, log_file=log_file)
 
 # 6. evaluation (VLMEvalKit run.py through the driver), with periodic checkpoint upload
 log(f"Step 6/6: VLMEvalKit {run_name} x {RUN['dataset']}")
@@ -661,9 +682,27 @@ else:
         for _p in Path(run_result["work_dir"]).rglob("*"):
             if _p.is_file() and not _p.is_symlink() and "visual_thoughts" not in _p.parts:
                 _z.write(_p, _p.relative_to(run_result["work_dir"]))
+    _combo = []
+    if RUN.get("combine_with"):  # CV-Bench overall = average of the 2D and 3D overall scores
+        _other = f"{run_result['run_name']}__{RUN['combine_with']}"
+        _o = [x for x in (Path(run_result["work_dir"]).parent / _other).rglob(f"{run_result['run_name']}_{RUN['combine_with']}_acc.csv")
+              if not x.is_symlink()]
+        _here = float(_df["Overall"].iloc[0]) * (100 if _df["Overall"].iloc[0] <= 1 else 1)
+        if _o:
+            _there = pd.read_csv(_o[-1])["Overall"].iloc[0]
+            _there = float(_there) * (100 if _there <= 1 else 1)
+            _combo = [mo.callout(mo.md(
+                f"**CV-Bench overall (average of 2D and 3D): {(_here + _there) / 2:.2f}** "
+                f"({RUN['bench_label']} {_here:.2f}, {RUN['combine_with']} {_there:.2f}). "
+                "ThinkMorph's paper reports CV-Bench this way."), kind="success")]
+        else:
+            _combo = [mo.callout(mo.md(
+                f"Your {RUN['combine_with']} results were not found (looked for `{_other}` in your HF repo), "
+                f"so combine by hand: CV-Bench overall = ({RUN['bench_label']} {_here:.2f} + {RUN['combine_with']} Overall) / 2."),
+                kind="info")]
     _view = mo.vstack(([_crash] if _crash else []) + [
         mo.md(f"### {RUN['model_label']} on {RUN['bench_label']} (accuracy, %)"),
-        mo.ui.table(_df, selection=None),
+        mo.ui.table(_df, selection=None)] + _combo + [
         mo.md("Overall accuracy is the `Overall` column. Full reasoning traces are in the `traces_*.jsonl` file inside the zip."),
         mo.download(data=_buf.getvalue(), filename=f"{run_result['run_name']}__{RUN['dataset']}_results.zip", label="Download predictions, scores and traces"),
     ])
@@ -698,11 +737,10 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     for f in OUT.glob("*.py"):
         f.unlink()
-    for mk in MODELS:
-        for bk in BENCHES:
-            path = OUT / f"{mk}__{bk}.py"
-            path.write_text(make_notebook(mk, bk))
-            print("wrote", path.name)
+    for mk, bk in notebook_pairs():
+        path = OUT / f"{mk}__{bk}.py"
+        path.write_text(make_notebook(mk, bk))
+        print("wrote", path.name)
 
 
 if __name__ == "__main__":
