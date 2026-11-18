@@ -739,14 +739,60 @@ def _():
             return False
 
 
+    def patch_qwen25_vision_sdpa():
+        """Memory fix for Qwen2.5-VL's vision encoder under SDPA attention (transformers 4.49).
+
+        transformers' SDPA vision attention passes 3-D tensors (heads, patches, dim) plus a dense
+        block-diagonal mask, so PyTorch can only use its "math" kernel, which materialises a float32
+        heads x patches x patches matrix: about 29 GB per copy for two 1080p frames. It runs out of GPU
+        memory on large or two-image inputs and is slow. VLMEvalKit's default (flash-attention 2) never
+        builds that matrix. This keeps exactly the same attention but lets PyTorch use its fused kernels:
+        each image (or window) block attends only to itself, computed per block when there are few
+        blocks (full-attention layers) and with the same mask in 4-D form otherwise (window layers).
+        """
+        import torch.nn.functional as F
+        from transformers.models.qwen2_5_vl import modeling_qwen2_5_vl as M
+
+        cls = getattr(M, "Qwen2_5_VLVisionSdpaAttention", None)
+        if cls is None or getattr(cls, "_molab_patched", False):
+            return False
+
+        def forward(self, hidden_states, cu_seqlens, rotary_pos_emb=None, position_embeddings=None):
+            seq_length = hidden_states.shape[0]
+            q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+            if position_embeddings is None:
+                emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+                cos, sin = emb.cos().float(), emb.sin().float()
+            else:
+                cos, sin = position_embeddings
+            q, k = M.apply_rotary_pos_emb_vision(q, k, cos, sin)
+            q, k, v = (x.transpose(0, 1).unsqueeze(0) for x in (q, k, v))  # (1, heads, patches, dim)
+            bounds = [int(b) for b in cu_seqlens.tolist()]
+            if len(bounds) - 1 <= 8:
+                out = torch.cat([F.scaled_dot_product_attention(q[:, :, s:e], k[:, :, s:e], v[:, :, s:e])
+                                 for s, e in zip(bounds[:-1], bounds[1:])], dim=2)
+            else:
+                mask = torch.zeros([1, 1, seq_length, seq_length], device=q.device, dtype=torch.bool)
+                for s, e in zip(bounds[:-1], bounds[1:]):
+                    mask[..., s:e, s:e] = True
+                out = F.scaled_dot_product_attention(q, k, v, mask, dropout_p=0.0)
+            out = out.squeeze(0).transpose(0, 1).reshape(seq_length, -1)
+            return self.proj(out)
+
+        cls.forward = forward
+        cls._molab_patched = True
+        return True
+
+
     def build_qwen25vl_class():
         from vlmeval.vlm.qwen2_vl import Qwen2VLChat
 
         class Qwen25VLEval(Qwen2VLChat):
             """The fork's Qwen2VLChat with the settings of its "Qwen2.5-VL-7B-Instruct" entry.
 
-            The only change: Qwen2VLChat always asks transformers for flash-attention-2, which is
-            rarely installed on molab / Colab, so PyTorch SDPA attention is used when it is missing.
+            Qwen2VLChat always asks transformers for flash-attention-2, which is rarely installed on
+            molab / Colab, so PyTorch SDPA attention is used when it is missing, with the vision
+            encoder's SDPA attention made memory-safe (patch_qwen25_vision_sdpa).
             """
 
             def __init__(self, model_path, attn_implementation="auto", seed=42, **kwargs):
@@ -756,6 +802,8 @@ def _():
                 attn = attn_implementation
                 if attn == "auto":
                     attn = "flash_attention_2" if _flash_attn_2_usable() else "sdpa"
+                if attn == "sdpa" and patch_qwen25_vision_sdpa():
+                    print("[molab] Qwen2.5-VL vision attention: per-image SDPA (no dense attention matrix)", flush=True)
                 _own = _Cls.__dict__.get("from_pretrained")  # None: inherited from PreTrainedModel
                 _orig = _Cls.from_pretrained
 
