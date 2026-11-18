@@ -13,6 +13,17 @@ The Colab version of the molab notebooks in `../molab_eval_notebooks`. Each note
 | ThinkMorph | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/thinkmorph__sat.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/thinkmorph__blink.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/thinkmorph__vstar.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/thinkmorph__mmvp.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/thinkmorph__cvbench3d.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/thinkmorph__cvbench2d.ipynb) |
 | DeltaV | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/deltav__sat.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/deltav__blink.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/deltav__vstar.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/deltav__mmvp.ipynb) | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/deltav__cvbench3d.ipynb) | – |
 
+## SenseNova-U1 and Qwen2.5-VL-7B: SAT, V* and MMVP with the Gemini judge
+
+One notebook per model runs SAT, V* and MMVP one after another (tick which ones in the settings), then sends only the answers exact matching cannot read to Gemini 3 Flash with VLMEvalKit's judge prompt. That is the same procedure as `llm_judge_repair.ipynb`, so the scores line up with the other models. Results go to the usual `<model>__<benchmark>` folders.
+
+| Model | Notebook | GPU | Time for all three |
+|---|---|---|---|
+| Qwen2.5-VL-7B-Instruct | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/qwen25vl__sat_vstar_mmvp.ipynb) | L4 or better | about 30–60 min |
+| SenseNova-U1-8B-MoT | [open](https://colab.research.google.com/github/mehmetmertdalkilic/molab-umm-eval/blob/main/colab_eval_notebooks/sensenova_u1__sat_vstar_mmvp.ipynb) | G4 or H100 (Pro+), or an 80 GB A100 (weights are 35 GB) | roughly 6–20 h with thinking on; run the smoke test first |
+
+Add `GEMINI_API_KEY` as a Colab secret for the judge. Without it you get exact-matching scores only. SenseNova-U1 runs with thinking on by default, as in SenseNova's own evaluation. Untick `THINKING` to run it as `SenseNova-U1-8B-MoT-nothink`.
+
 ## Which GPU (and Colab plan) you need
 
 | Model | Minimum GPU | Colab plan |

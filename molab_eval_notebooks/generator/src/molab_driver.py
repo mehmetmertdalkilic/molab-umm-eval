@@ -88,7 +88,8 @@ def main(spec_path):
         spec = json.load(f)
 
     fork = spec["fork_dir"]
-    for p in [spec["code_dir"], fork] + ([spec["deltav_repo"]] if spec.get("deltav_repo") else []):
+    extra = ([spec["deltav_repo"]] if spec.get("deltav_repo") else []) + list(spec.get("extra_paths") or [])
+    for p in [spec["code_dir"], fork] + extra:
         if p not in sys.path:
             sys.path.insert(0, p)
 

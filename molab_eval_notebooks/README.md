@@ -30,6 +30,17 @@ File names are `<model>__<benchmark>.py`, e.g. `thinkmorph__blink.py`.
 | ThinkMorph | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__sat.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__blink.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__vstar.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__mmvp.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__cvbench3d.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/thinkmorph__cvbench2d.py) |
 | DeltaV | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__sat.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__blink.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__vstar.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__mmvp.py) | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/deltav__cvbench3d.py) | – |
 
+## SenseNova-U1 and Qwen2.5-VL-7B: SAT, V* and MMVP with the Gemini judge
+
+One notebook per model runs SAT, V* and MMVP one after another (tick which ones in the form), then sends only the answers exact matching cannot read to Gemini 3 Flash with VLMEvalKit's judge prompt. That is the same procedure as `llm_judge_repair.ipynb`, so the scores line up with the other models. Checkpoints go to your HF repo under the usual `<model>__<benchmark>` folders.
+
+| Model | Notebook | Time for all three on the RTX Pro 6000 |
+|---|---|---|
+| Qwen2.5-VL-7B-Instruct | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/qwen25vl__sat_vstar_mmvp.py) | about 30 min |
+| SenseNova-U1-8B-MoT | [open](https://molab.marimo.io/github/mehmetmertdalkilic/molab-umm-eval/blob/main/molab_eval_notebooks/sensenova_u1__sat_vstar_mmvp.py) | roughly 6–20 h with thinking on (more than one 12-hour session; press Start again to resume) |
+
+Paste a Gemini API key in the form for the judge. Without one you get exact-matching scores only. SenseNova-U1 runs with thinking on by default, as in SenseNova's own evaluation; untick it to run `SenseNova-U1-8B-MoT-nothink`.
+
 ## Running a notebook on molab
 
 1. Click a link in the table above (or paste the notebook's GitHub URL into the new-notebook dropdown on molab) and add the notebook to your workspace.

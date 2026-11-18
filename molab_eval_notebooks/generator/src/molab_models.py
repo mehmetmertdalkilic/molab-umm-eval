@@ -12,6 +12,8 @@ benchmark files, prompts and scoring code.
                       plus answer extraction and trace logging.
   * DeltaVEval      - the official DeltaV VLMEvalKit wrapper
                       (DeltaV repo, vlmevalkit/vlm/deltav_evalkit.py).
+  * Qwen25VLEval    - the fork's Qwen2VLChat (Qwen2.5-VL-7B-Instruct entry).
+  * SenseNovaU1Eval - SenseNova-U1 through the official sensenova_u1 package.
 
 Every wrapper writes the full reasoning trace of each sample to the JSONL file
 named by $MOLAB_TRACE_FILE and returns only the final answer span to
@@ -432,6 +434,196 @@ def build_deltav_class(deltav_repo):
     return DeltaVEval
 
 
+# ------------------------------------------------------------------- Qwen2.5-VL
+
+
+def _flash_attn_2_usable():
+    try:
+        import flash_attn  # noqa: F401
+        from transformers.utils import is_flash_attn_2_available
+        return bool(is_flash_attn_2_available())
+    except Exception:
+        return False
+
+
+def build_qwen25vl_class():
+    from vlmeval.vlm.qwen2_vl import Qwen2VLChat
+
+    class Qwen25VLEval(Qwen2VLChat):
+        """The fork's Qwen2VLChat with the settings of its "Qwen2.5-VL-7B-Instruct" entry.
+
+        The only change: Qwen2VLChat always asks transformers for flash-attention-2, which is
+        rarely installed on molab / Colab, so PyTorch SDPA attention is used when it is missing.
+        """
+
+        def __init__(self, model_path, attn_implementation="auto", seed=42, **kwargs):
+            from transformers import Qwen2_5_VLForConditionalGeneration as _Cls
+
+            seed_everything(seed)
+            attn = attn_implementation
+            if attn == "auto":
+                attn = "flash_attention_2" if _flash_attn_2_usable() else "sdpa"
+            _own = _Cls.__dict__.get("from_pretrained")  # None: inherited from PreTrainedModel
+            _orig = _Cls.from_pretrained
+
+            def _from_pretrained(*a, **k):
+                k["attn_implementation"] = attn
+                return _orig(*a, **k)
+
+            _Cls.from_pretrained = _from_pretrained
+            try:
+                super().__init__(model_path=model_path, **kwargs)
+            finally:
+                if _own is None:
+                    del _Cls.from_pretrained
+                else:
+                    _Cls.from_pretrained = _own
+            print(f"[molab] Qwen2.5-VL loaded with {attn} attention; "
+                  f"GPU mem {torch.cuda.memory_allocated() / 2**30:.1f} GiB", flush=True)
+
+        def generate_inner(self, message, dataset=None):
+            out = super().generate_inner(message, dataset=dataset)
+            log_trace({"dataset": dataset, "images": message_paths(message),
+                       "prompt": "\n".join(m["value"] for m in message if m["type"] == "text"),
+                       "output": out, "prediction": out})
+            return out
+
+    return Qwen25VLEval
+
+
+# ----------------------------------------------------------------- SenseNova-U1
+
+
+def _mem_available_gib():
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 2**20
+    except Exception:
+        pass
+    return 1e9
+
+
+class SenseNovaU1Eval(BaseModel):
+    """SenseNova-U1 (NEO-unify) through the official `sensenova_u1` package.
+
+    Image preprocessing and generation follow the repo's VQA example
+    (examples/vqa/inference.py: load_image_native, model.generate). The prompt is what the
+    checkpoint's chat_template.jinja renders for one user turn, which is what SenseNova's own
+    VLMEvalKit evaluation sends through its server: no system block, "<image>\\n" per image,
+    and, with thinking off, an empty "<think>\\n\\n</think>\\n\\n" after the assistant header.
+
+    With thinking on, the answer is the text after </think>. An answer cut off by the token
+    limit before </think> has no answer, as in SenseNova's server (its reasoning parser then
+    returns empty content), so VLMEvalKit receives an empty prediction for it.
+    """
+
+    INSTALL_REQ = False
+    INTERLEAVE = True
+    IMG_START, IMG_END, IMG_CONTEXT = "<img>", "</img>", "<IMG_CONTEXT>"
+
+    def __init__(self, model_path, think=True, max_new_tokens=8192, do_sample=False,
+                 temperature=0.6, top_p=0.95, top_k=20, repetition_penalty=None,
+                 min_pixels=65536, max_pixels=4194304, attn_backend="auto",
+                 extract_answer=True, seed=42, **kwargs):
+        super().__init__()
+        seed_everything(seed)
+        import sensenova_u1
+        from sensenova_u1.models.neo_unify.conversation import get_conv_template
+        from sensenova_u1.models.neo_unify.utils import load_image_native
+        from sensenova_u1.utils import load_model_and_tokenizer
+
+        sensenova_u1.set_attn_backend(attn_backend)
+        t0 = time.time()
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if self.device == "cuda" and _mem_available_gib() < 48:
+            # the repo's default path builds the 35 GB model in CPU memory first; with less RAM than
+            # that, stream the weights straight to the GPU (the loader's device_map option)
+            self.model, self.tokenizer = load_model_and_tokenizer(
+                model_path, dtype=torch.bfloat16, device=None, device_map="cuda")
+        else:
+            self.model, self.tokenizer = load_model_and_tokenizer(model_path, dtype=torch.bfloat16, device=self.device)
+        self.model.eval()
+        self._load_image = load_image_native
+        tpl = get_conv_template(self.model.template)
+        self.user_role, self.assistant_role = tpl.roles
+        self.sep = tpl.sep
+        tok = self.tokenizer
+        self.model.img_context_token_id = tok.convert_tokens_to_ids(self.IMG_CONTEXT)
+        self.model.img_start_token_id = tok.convert_tokens_to_ids(self.IMG_START)
+        self.eos_token_id = tok.convert_tokens_to_ids(self.sep.strip())
+        self.think = bool(think)
+        self.max_new_tokens = int(max_new_tokens)
+        self.min_pixels, self.max_pixels = int(min_pixels), int(max_pixels)
+        self.extract = bool(extract_answer)
+        self.gen_cfg = dict(max_new_tokens=self.max_new_tokens, do_sample=bool(do_sample),
+                            eos_token_id=self.eos_token_id)
+        if do_sample:
+            self.gen_cfg.update(temperature=float(temperature), top_p=float(top_p))
+            if top_k is not None:
+                self.gen_cfg["top_k"] = int(top_k)
+        if repetition_penalty is not None:
+            self.gen_cfg["repetition_penalty"] = float(repetition_penalty)
+        print(f"[molab] SenseNova-U1 loaded in {time.time() - t0:.0f}s; attention "
+              f"{sensenova_u1.effective_attn_backend()}; thinking {'on' if self.think else 'off'}; "
+              f"GPU mem {torch.cuda.memory_allocated() / 2**30 if torch.cuda.is_available() else 0:.1f} GiB", flush=True)
+
+    def build_query(self, message):
+        """Rendered prompt (with one <image> placeholder per image) and the images, in order."""
+        content, images = "", []
+        for m in message:
+            if m["type"] == "image":
+                images.append(m["value"])
+                content += "<image>\n"
+            elif m["type"] == "text":
+                content += m["value"]
+        query = self.user_role + content + self.sep + self.assistant_role
+        if not self.think:
+            query += "<think>\n\n</think>\n\n"
+        return query, images
+
+    @torch.inference_mode()
+    def generate_inner(self, message, dataset=None):
+        query, images = self.build_query(message)
+        prompt = query
+        model, tok = self.model, self.tokenizer
+        pixel_values = grid_hw = None
+        if images:
+            pv, gh = [], []
+            for img in images:
+                img = Image.open(img) if isinstance(img, str) else img
+                p, g = self._load_image(img, min_pixels=self.min_pixels, max_pixels=self.max_pixels)
+                pv.append(p)
+                gh.append(g)
+            pixel_values = torch.cat(pv).to(self.device, dtype=model.dtype)
+            grid_hw = torch.cat(gh).to(self.device)
+            for i in range(grid_hw.shape[0]):
+                n = int(grid_hw[i, 0] * grid_hw[i, 1] * model.downsample_ratio ** 2)
+                query = query.replace("<image>", self.IMG_START + self.IMG_CONTEXT * n + self.IMG_END, 1)
+        enc = tok(query, return_tensors="pt")
+        out_ids = model.generate(pixel_values=pixel_values, input_ids=enc["input_ids"].to(self.device),
+                                 grid_hw=grid_hw, attention_mask=enc["attention_mask"].to(self.device),
+                                 **dict(self.gen_cfg))
+        n_new = int(out_ids.shape[-1])
+        # keep <think> / </think> even if the tokenizer marks them special; cut at <|im_end|>
+        raw = tok.decode(out_ids[0], skip_special_tokens=False).split(self.sep.strip())[0]
+        for s in tok.all_special_tokens:
+            if s not in ("<think>", "</think>"):
+                raw = raw.replace(s, "")
+        raw = raw.strip()
+        cut_off = False
+        if "</think>" in raw:
+            answer = raw.rsplit("</think>", 1)[1].strip()
+        elif self.think and ("<think>" in raw or n_new >= self.max_new_tokens):
+            answer, cut_off = "", True  # still reasoning when the token limit was reached
+        else:
+            answer = raw
+        pred = finalize_prediction(answer, self.extract) if answer else ""
+        log_trace({"dataset": dataset, "images": message_paths(message),
+                   "prompt": prompt, "output": raw, "prediction": pred, "new_tokens": n_new, "cut_off": cut_off})
+        return pred
+
+
 # ---------------------------------------------------------------------- registry
 
 
@@ -444,4 +636,8 @@ def get_model_class(name, spec):
         return build_thinkmorph_class()
     if name == "DeltaVEval":
         return build_deltav_class(spec["deltav_repo"])
+    if name == "Qwen25VLEval":
+        return build_qwen25vl_class()
+    if name == "SenseNovaU1Eval":
+        return SenseNovaU1Eval
     raise ValueError(f"unknown model class {name}")
