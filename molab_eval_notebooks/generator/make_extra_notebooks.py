@@ -345,8 +345,10 @@ def run_eval(RUN, S):
     # 7. Gemini judge for the answers exact matching could not read
     judge_csv = P["work"] / "gemini_judge" / f"{run_name}_{RUN['dataset']}_judge_scores.csv"
     if not score_files:
+        judge_status = "not run: no exact-matching score yet"
         log("Step 7/7: no exact-matching score yet, so the Gemini judge is skipped. Last log lines:\\n" + tail(log_file))
     elif not gemini_key:
+        judge_status = "not run: no GEMINI_API_KEY" + (" (scores from an earlier run)" if judge_csv.exists() else "")
         log("Step 7/7: no GEMINI_API_KEY, so the Gemini judge is skipped (exact-matching scores only).")
     else:
         log(f"Step 7/7: Gemini judge ({S['GEMINI_MODEL']}, thinking level {S['THINKING_LEVEL']})")
@@ -361,21 +363,29 @@ def run_eval(RUN, S):
                                      "parallel": 4}))
         jenv = dict(env, GEMINI_API_KEY=gemini_key,
                     PYTHONPATH=os.pathsep.join([str(P["judge_pkgs"]), str(P["code"])]))
-        if stream_cmd([sys.executable, "-u", P["code"] / "molab_judge.py", jspec], env=jenv, log_file=log_file) != 0:
-            log("The Gemini judge failed (see above); the exact-matching score is still valid. Run again to retry.")
+        judge_csv.unlink(missing_ok=True)  # never show an earlier run's judge scores as this run's
+        if stream_cmd([sys.executable, "-u", P["code"] / "molab_judge.py", jspec], env=jenv, log_file=log_file) == 0:
+            judge_status = "done"
+        else:
+            judge_status = "failed: see the [judge] lines in the output above"
+            log("The Gemini judge failed (see above); the exact-matching score is still valid. "
+                "Run again (MODE eval is enough) to retry.")
         if drive_dir is not None or hf_repo:
             push()
     minutes = (time.time() - t0) / 60
     log(f"{RUN['bench_label']} finished in {minutes:.0f} min.")
     return {"exit_code": exit_code, "work_dir": P["work"], "run_name": run_name, "dataset": RUN["dataset"],
             "bench_label": RUN["bench_label"], "model_label": RUN["model_label"], "score_files": score_files,
-            "judge_csv": judge_csv if judge_csv.exists() else None, "log_file": log_file, "minutes": minutes}
+            "judge_csv": judge_csv if judge_csv.exists() else None, "judge_status": judge_status,
+            "log_file": log_file, "minutes": minutes}
 
 
 def results_table(results):
     """One row per benchmark: exact matching, with the Gemini judge, and what the judge did."""
     import pandas as pd
     rows, warnings = [], []
+    counts = ("unreadable answers", "sent to judge", "judge found an option", "of which right",
+              "empty or cut off (not judged)", "crashed answers")
     for key, res in results.items():
         row = {"benchmark": res["bench_label"]}
         for x in Path(res["work_dir"]).rglob(f"{res['run_name']}_{res['dataset']}.xlsx"):
@@ -392,11 +402,18 @@ def results_table(results):
         if res.get("judge_csv"):
             j = pd.read_csv(res["judge_csv"]).iloc[0]
             row["with Gemini judge"] = j["with Gemini judge"]
-            for c in ("unreadable answers", "sent to judge", "judge found an option", "of which right",
-                      "empty or cut off (not judged)", "crashed answers"):
+            for c in counts:
                 row[c] = int(j[c])
+        row["judge"] = res.get("judge_status", "")
+        if row["judge"].startswith("failed"):
+            warnings.append(f"{res['bench_label']}: the Gemini judge failed, so there is no judged score. "
+                            "Its [judge] lines in the output above say why; run again (MODE eval) to retry.")
         rows.append(row)
-    return pd.DataFrame(rows), warnings
+    table = pd.DataFrame(rows)
+    for c in counts:
+        if c in table:
+            table[c] = table[c].astype("Int64")
+    return table, warnings
 
 
 def zip_results(results, zpath):

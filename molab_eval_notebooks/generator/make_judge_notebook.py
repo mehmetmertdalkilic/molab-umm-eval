@@ -211,7 +211,7 @@ print(f"{len(DATA)} of {len(RUNS) * len(BENCHMARKS)} model/benchmark runs found.
 JUDGE = r'''#@title 3. Repair unreadable answers with Gemini
 from google import genai
 
-client = genai.Client(api_key=GEMINI_KEY)
+client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1beta"})
 CONFIG = {"thinking_config": {"thinking_level": THINKING_LEVEL}}
 
 def call_gemini(prompt):
